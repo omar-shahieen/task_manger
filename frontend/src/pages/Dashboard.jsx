@@ -1,18 +1,79 @@
-import { useState, useEffect } from "react";
+import React, { useReducer, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import axios from "../utils/axios";
+import TaskForm from "../components/TaskForm";
+import TaskList from "../components/TaskList";
+
+const initialState = {
+  tasks: [],
+  loading: true,
+  error: "",
+  formData: { title: "", description: "", status: "pending" },
+  editingTask: null,
+};
+
+function reducer(state, action) {
+  switch (action.type) {
+    case "FETCH_START":
+      return { ...state, loading: true, error: "" };
+    case "FETCH_SUCCESS":
+      return { ...state, loading: false, tasks: action.payload };
+    case "FETCH_ERROR":
+      return { ...state, loading: false, error: action.payload };
+    case "SET_FORM":
+      return {
+        ...state,
+        formData: {
+          ...state.formData,
+          [action.payload.name]: action.payload.value,
+        },
+      };
+    case "RESET_FORM":
+      return {
+        ...state,
+        formData: { title: "", description: "", status: "pending" },
+      };
+    case "START_EDIT":
+      return {
+        ...state,
+        editingTask: action.payload,
+        formData: {
+          title: action.payload.title,
+          description: action.payload.description || "",
+          status: action.payload.status,
+        },
+      };
+    case "CANCEL_EDIT":
+      return {
+        ...state,
+        editingTask: null,
+        formData: { title: "", description: "", status: "pending" },
+      };
+    case "ADD_TASK":
+      return { ...state, tasks: [action.payload, ...state.tasks] };
+    case "UPDATE_TASK":
+      return {
+        ...state,
+        tasks: state.tasks.map((t) =>
+          t.id === action.payload.id ? action.payload : t
+        ),
+        editingTask: null,
+      };
+    case "DELETE_TASK":
+      return {
+        ...state,
+        tasks: state.tasks.filter((t) => t.id !== action.payload),
+      };
+    case "SET_ERROR":
+      return { ...state, error: action.payload };
+    default:
+      return state;
+  }
+}
 
 const Dashboard = () => {
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [formData, setFormData] = useState({
-    title: "",
-    description: "",
-    status: "pending",
-  });
-  const [editingTask, setEditingTask] = useState(null);
+  const [state, dispatch] = useReducer(reducer, initialState);
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -21,41 +82,45 @@ const Dashboard = () => {
   }, []);
 
   const fetchTasks = async () => {
+    dispatch({ type: "FETCH_START" });
     try {
-      setLoading(true);
       const response = await axios.get("/tasks");
-      setTasks(response.data.tasks);
-      setError("");
+      dispatch({ type: "FETCH_SUCCESS", payload: response.data.tasks });
     } catch (err) {
-      setError("Failed to fetch tasks.");
-    } finally {
-      setLoading(false);
+      dispatch({ type: "FETCH_ERROR", payload: "Failed to fetch tasks." });
     }
+  };
+
+  const handleFormChange = (name, value) => {
+    dispatch({ type: "SET_FORM", payload: { name, value } });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
+    dispatch({ type: "SET_ERROR", payload: "" });
 
-    if (!formData.title.trim()) {
-      setError("Title is required.");
+    if (!state.formData.title.trim()) {
+      dispatch({ type: "SET_ERROR", payload: "Title is required." });
       return;
     }
 
     try {
-      if (editingTask) {
-        const response = await axios.put(`/tasks/${editingTask.id}`, formData);
-        setTasks(
-          tasks.map((t) => (t.id === editingTask.id ? response.data.task : t))
+      if (state.editingTask) {
+        const response = await axios.put(
+          `/tasks/${state.editingTask.id}`,
+          state.formData
         );
-        setEditingTask(null);
+        dispatch({ type: "UPDATE_TASK", payload: response.data.task });
       } else {
-        const response = await axios.post("/tasks", formData);
-        setTasks([response.data.task, ...tasks]);
+        const response = await axios.post("/tasks", state.formData);
+        dispatch({ type: "ADD_TASK", payload: response.data.task });
       }
-      setFormData({ title: "", description: "", status: "pending" });
+      dispatch({ type: "RESET_FORM" });
     } catch (err) {
-      setError(err.response?.data?.error || "Operation failed.");
+      dispatch({
+        type: "SET_ERROR",
+        payload: err.response?.data?.error || "Operation failed.",
+      });
     }
   };
 
@@ -64,9 +129,9 @@ const Dashboard = () => {
 
     try {
       await axios.delete(`/tasks/${id}`);
-      setTasks(tasks.filter((t) => t.id !== id));
+      dispatch({ type: "DELETE_TASK", payload: id });
     } catch (err) {
-      setError("Failed to delete task.");
+      dispatch({ type: "SET_ERROR", payload: "Failed to delete task." });
     }
   };
 
@@ -75,55 +140,23 @@ const Dashboard = () => {
       const response = await axios.put(`/tasks/${task.id}`, {
         status: newStatus,
       });
-      setTasks(tasks.map((t) => (t.id === task.id ? response.data.task : t)));
+      dispatch({ type: "UPDATE_TASK", payload: response.data.task });
     } catch (err) {
-      setError("Failed to update task status.");
+      dispatch({ type: "SET_ERROR", payload: "Failed to update task status." });
     }
   };
 
   const handleEdit = (task) => {
-    setEditingTask(task);
-    setFormData({
-      title: task.title,
-      description: task.description || "",
-      status: task.status,
-    });
+    dispatch({ type: "START_EDIT", payload: task });
   };
 
   const cancelEdit = () => {
-    setEditingTask(null);
-    setFormData({ title: "", description: "", status: "pending" });
+    dispatch({ type: "CANCEL_EDIT" });
   };
 
   const handleLogout = () => {
     logout();
     navigate("/login");
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case "pending":
-        return "bg-yellow-100 text-yellow-800";
-      case "in_progress":
-        return "bg-blue-100 text-blue-800";
-      case "done":
-        return "bg-green-100 text-green-800";
-      default:
-        return "bg-gray-100 text-gray-800";
-    }
-  };
-
-  const getStatusText = (status) => {
-    switch (status) {
-      case "pending":
-        return "Pending";
-      case "in_progress":
-        return "In Progress";
-      case "done":
-        return "Done";
-      default:
-        return status;
-    }
   };
 
   return (
@@ -144,158 +177,29 @@ const Dashboard = () => {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {error && (
+        {state.error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
-            {error}
+            {state.error}
           </div>
         )}
 
-        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">
-            {editingTask ? "Edit Task" : "Add New Task"}
-          </h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label
-                htmlFor="title"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Title *
-              </label>
-              <input
-                type="text"
-                id="title"
-                value={formData.title}
-                onChange={(e) =>
-                  setFormData({ ...formData, title: e.target.value })
-                }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                placeholder="Enter task title"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="description"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Description
-              </label>
-              <textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) =>
-                  setFormData({ ...formData, description: e.target.value })
-                }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                rows="3"
-                placeholder="Enter task description (optional)"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="status"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Status
-              </label>
-              <select
-                id="status"
-                value={formData.status}
-                onChange={(e) =>
-                  setFormData({ ...formData, status: e.target.value })
-                }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-              >
-                <option value="pending">Pending</option>
-                <option value="in_progress">In Progress</option>
-                <option value="done">Done</option>
-              </select>
-            </div>
-
-            <div className="flex space-x-2">
-              <button
-                type="submit"
-                className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition"
-              >
-                {editingTask ? "Update Task" : "Add Task"}
-              </button>
-              {editingTask && (
-                <button
-                  type="button"
-                  onClick={cancelEdit}
-                  className="bg-gray-400 text-white px-6 py-2 rounded-lg hover:bg-gray-500 transition"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </form>
-        </div>
+        <TaskForm
+          formData={state.formData}
+          editingTask={state.editingTask}
+          onChange={handleFormChange}
+          onSubmit={handleSubmit}
+          onCancel={cancelEdit}
+        />
 
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-xl font-semibold mb-4">Your Tasks</h2>
-          {loading ? (
-            <div className="text-center py-8 text-gray-500">
-              Loading tasks...
-            </div>
-          ) : tasks.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              No tasks yet. Create your first task above!
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition"
-                >
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-lg font-semibold text-gray-800">
-                      {task.title}
-                    </h3>
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(
-                        task.status
-                      )}`}
-                    >
-                      {getStatusText(task.status)}
-                    </span>
-                  </div>
-                  {task.description && (
-                    <p className="text-gray-600 mb-3">{task.description}</p>
-                  )}
-                  <div className="text-xs text-gray-400 mb-3">
-                    Created: {new Date(task.created_at).toLocaleDateString()}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <select
-                      value={task.status}
-                      onChange={(e) => handleStatusChange(task, e.target.value)}
-                      className="px-3 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    >
-                      <option value="pending">Pending</option>
-                      <option value="in_progress">In Progress</option>
-                      <option value="done">Done</option>
-                    </select>
-                    <button
-                      onClick={() => handleEdit(task)}
-                      className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition text-sm"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDelete(task.id)}
-                      className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition text-sm"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <TaskList
+            tasks={state.tasks}
+            loading={state.loading}
+            onStatusChange={handleStatusChange}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+          />
         </div>
       </div>
     </div>
